@@ -32,6 +32,7 @@ namespace Icebreaker.Services
         private readonly TelemetryClient telemetryClient;
         private readonly BotAdapter botAdapter;
         private readonly int maxPairUpsPerTeam;
+        private readonly int maxRecentPairUpsToPersistPerUser;
         private readonly string botDisplayName;
 
         /// <summary>
@@ -48,6 +49,7 @@ namespace Icebreaker.Services
             this.telemetryClient = telemetryClient;
             this.botAdapter = botAdapter;
             this.maxPairUpsPerTeam = Convert.ToInt32(CloudConfigurationManager.GetSetting("MaxPairUpsPerTeam"));
+            this.maxRecentPairUpsToPersistPerUser = Convert.ToInt32(CloudConfigurationManager.GetSetting("MaxRecentPairUpsToPersistPerUser"));
             this.botDisplayName = CloudConfigurationManager.GetSetting("BotDisplayName");
         }
 
@@ -91,9 +93,9 @@ namespace Icebreaker.Services
                         var teamName = await this.conversationHelper.GetTeamNameByIdAsync(this.botAdapter, team);
                         var optedInUsers = await this.GetOptedInUsersAsync(dbMembersLookup, team);
 
-                        foreach (var pair in this.MakePairs(optedInUsers).Take(this.maxPairUpsPerTeam))
+                        foreach (var pair in this.MakePairs(optedInUsers, team).Take(this.maxPairUpsPerTeam))
                         {
-                            usersNotifiedCount += await this.NotifyPairAsync(team, teamName, pair, default(CancellationToken));
+                            usersNotifiedCount += await this.NotifyPairAsync(team, teamName, pair, default);
                             pairsNotifiedCount++;
                         }
                     }
@@ -138,7 +140,7 @@ namespace Icebreaker.Services
             var cultureName = CloudConfigurationManager.GetSetting("DefaultCulture");
             Thread.CurrentThread.CurrentCulture = Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo(cultureName);
 
-            this.telemetryClient.TrackTrace($"Sending pairup notification to {pair.Item1.Id} and {pair.Item2.Id}");
+            this.telemetryClient.TrackTrace($"Sending pairup notification to {pair?.Item1?.Id} and {pair?.Item2?.Id}");
 
             var teamsPerson1 = JObject.FromObject(pair.Item1).ToObject<TeamsChannelAccount>();
             var teamsPerson2 = JObject.FromObject(pair.Item2).ToObject<TeamsChannelAccount>();
@@ -194,26 +196,201 @@ namespace Icebreaker.Services
         /// </summary>
         /// <param name="users">Users accounts</param>
         /// <returns>List of pairs</returns>
-        private List<Tuple<ChannelAccount, ChannelAccount>> MakePairs(List<ChannelAccount> users)
+        private List<Tuple<ChannelAccount, ChannelAccount>> MakePairs(List<ChannelAccount> users, TeamInstallInfo teamModel)
         {
-            if (users.Count > 1)
-            {
-                this.telemetryClient.TrackTrace($"Making {users.Count / 2} pairs among {users.Count} users");
-            }
-            else
-            {
-                this.telemetryClient.TrackTrace($"Pairs could not be made because there is only 1 user in the team");
-            }
+            this.telemetryClient.TrackTrace(users.Count > 1
+                ? $"Making {users.Count / 2} pairs among {users.Count} users"
+                : $"Pairs could not be made because there is only 1 user in the team");
 
             this.Randomize(users);
 
+            var queue = new LinkedList<ChannelAccount>(users);
             var pairs = new List<Tuple<ChannelAccount, ChannelAccount>>();
-            for (int i = 0; i < users.Count - 1; i += 2)
+            for (var i = 0; i < users.Count - 1; i += 2)
             {
-                pairs.Add(new Tuple<ChannelAccount, ChannelAccount>(users[i], users[i + 1]));
+                while (queue.Count > 0)
+                {
+                    pairs.Add(new Tuple<ChannelAccount, ChannelAccount>(users[i], users[i + 1]));
+                    ChannelAccount pairUserOne = queue.First.Value;
+                    ChannelAccount pairUserTwo = null;
+
+                    UserInfo pairUserOneInfo =
+                        this.GetOrCreateUserInfoAsync(this.GetChannelUserObjectId(pairUserOne), teamModel)?.Result;
+                    this.telemetryClient.TrackTrace($"Dequeuing (1) {pairUserOneInfo?.UserId}");
+                    queue.RemoveFirst();
+
+                    if (pairUserOneInfo.RecentPairUps == null)
+                        pairUserOneInfo.RecentPairUps = new List<UserInfo>();
+
+                    bool foundPerfectPairing = false;
+
+                    for (LinkedListNode<ChannelAccount> restOfQueue = queue.First;
+                         restOfQueue != null;
+                         restOfQueue = restOfQueue.Next)
+                    {
+                        pairUserTwo = restOfQueue.Value;
+                        UserInfo pairUserTwoInfo =
+                            this.GetOrCreateUserInfoAsync(this.GetChannelUserObjectId(pairUserTwo), teamModel)?.Result;
+
+                        if (pairUserTwoInfo.RecentPairUps == null)
+                            pairUserTwoInfo.RecentPairUps = new List<UserInfo>();
+
+                        this.telemetryClient.TrackTrace(
+                            $"Processing {pairUserOneInfo?.UserId} and {pairUserTwoInfo?.UserId}");
+
+                        // check if userone and usertwo have already paired recently
+                        if (!this.SamePairNotCreatedRecently(pairUserOneInfo, pairUserTwoInfo)) continue;
+                        this.telemetryClient.TrackTrace(
+                            $"Pairing {pairUserOneInfo?.UserId} and {pairUserTwoInfo?.UserId}");
+
+                        pairs.Add(new Tuple<ChannelAccount, ChannelAccount>(pairUserOne, pairUserTwo));
+                        this.UpdateUserRecentlyPairedAsync(pairUserOneInfo, pairUserTwoInfo);
+                        this.UpdateUserRecentlyPairedAsync(pairUserTwoInfo, pairUserOneInfo);
+
+                        // Remove pairUserTwo since user has been paired
+                        this.telemetryClient.TrackTrace($"Dequeuing (2) {pairUserTwoInfo?.UserId}");
+                        queue.Remove(pairUserTwo);
+                        foundPerfectPairing = true;
+                        break;
+                    }
+
+                    // Not possible to find a perfect pairing, so just use next.
+                    if (foundPerfectPairing) continue;
+                    this.telemetryClient.TrackTrace($"No perfect pair; selecting next user");
+                    pairUserTwo = queue.First?.Value;
+
+                    if (pairUserTwo != null)
+                    {
+                        pairs.Add(new Tuple<ChannelAccount, ChannelAccount>(pairUserOne, pairUserTwo));
+                        queue.RemoveFirst();
+                        this.telemetryClient.TrackTrace($"Pair formed; dequeued next user");
+                    }
+                    else
+                    {
+                        this.telemetryClient.TrackTrace($"No more users left to pair with");
+                    }
+                }
             }
 
+            this.telemetryClient.TrackTrace($"Formed {pairs.Count} pairs");
+
             return pairs;
+        }
+
+        /// <summary>
+        /// Gets user info from the data store, or else generates it
+        /// </summary>
+        /// <param name="userId">User object Id</param>
+        /// <param name="teamModel">DB team model info</param>
+        /// <returns>List of pairs</returns>
+        private async Task<UserInfo> GetOrCreateUserInfoAsync(string userId, TeamInstallInfo teamModel)
+        {
+            this.telemetryClient.TrackTrace($"Getting info for {userId}");
+
+            UserInfo userInfo = await this.dataProvider.GetUserInfoAsync(userId);
+
+            if (userInfo == null)
+            {
+                this.telemetryClient.TrackTrace($"{userId} info is not saved, generating now");
+
+                userInfo = new UserInfo()
+                {
+                    TenantId = teamModel.TenantId,
+                    UserId = userId,
+                    OptedIn = true,
+                    ServiceUrl = teamModel.ServiceUrl,
+                    RecentPairUps = new List<UserInfo>(),
+                };
+            }
+
+            return userInfo;
+        }
+
+        /// <summary>
+        /// This method serves to update the pair's respective "RecentlyPaired" fields with each other.
+        /// </summary>
+        /// <param name="userOneInfo">UserInfo of the first user in pair</param>
+        /// <param name="userTwoInfo">UserInfo of the second user in pair</param>
+        private async void UpdateUserRecentlyPairedAsync(UserInfo userOneInfo, UserInfo userTwoInfo)
+        {
+            if (userOneInfo.RecentPairUps.Count == this.maxRecentPairUpsToPersistPerUser)
+            {
+                userOneInfo.RecentPairUps.RemoveAt(0);
+            }
+
+            userOneInfo.RecentPairUps.Add(userTwoInfo);
+
+            this.telemetryClient.TrackTrace($"Updating user info for {userOneInfo?.UserId}");
+
+            await this.SetUserInfoAsync(userOneInfo);
+
+            this.telemetryClient.TrackTrace($"Successfully updated user info for {userOneInfo?.UserId}");
+        }
+
+        /// <summary>
+        /// Set the user info for the given user (from UserInfo object)
+        /// </summary>
+        /// <param name="userInfo">User info</param>
+        /// <returns>Tracking task</returns>
+        private async Task SetUserInfoAsync(UserInfo userInfo)
+        {
+            await this.SetUserInfoAsync(userInfo.TenantId, userInfo.UserId, userInfo.OptedIn, userInfo.ServiceUrl, userInfo.RecentPairUps);
+        }
+
+        /// <summary>
+        /// Set the user info for the given user
+        /// </summary>
+        /// <param name="tenantId">Tenant id</param>
+        /// <param name="userId">User id</param>
+        /// <param name="optedIn">User opt-in status</param>
+        /// <param name="serviceUrl">User service URL</param>
+        /// <param name="recentPairUps">User recent pairs</param>
+        /// <returns>Tracking task</returns>
+        private async Task SetUserInfoAsync(string tenantId, string userId, bool optedIn, string serviceUrl, List<UserInfo> recentPairUps)
+        {
+            try
+            {
+                await this.dataProvider.SetUserInfoAsync(
+                    tenantId,
+                    userId,
+                    optedIn,
+                    serviceUrl,
+                    recentPairUps
+                        .Where(u => u.UserId != userId)
+                        .Select(u => new UserInfo()
+                        {
+                            TenantId = u.TenantId,
+                            UserId = u.UserId,
+                            OptedIn = u.OptedIn,
+                            ServiceUrl = u.ServiceUrl,
+                            RecentPairUps = null,
+                        })
+                        .ToList());
+            }
+            catch (Exception ex)
+            {
+                this.telemetryClient.TrackTrace($"Error updating user info: {ex.Message}", SeverityLevel.Warning);
+                this.telemetryClient.TrackException(ex);
+            }
+        }
+
+        /// <summary>
+        /// This method returns True if UserOne in pair was not 'recently matched' with UserTwo
+        /// </summary>
+        /// <param name="userOneInfo">UserInfo of the first user in pair</param>
+        /// <param name="userTwoInfo">UserInfo of the second user in pair</param>
+        /// <returns>True if users were NOT paired recently</returns>
+        private bool SamePairNotCreatedRecently(UserInfo userOneInfo, UserInfo userTwoInfo)
+        {
+            if (userOneInfo == null || userTwoInfo == null)
+            {
+                return false;
+            }
+
+            this.telemetryClient.TrackTrace($"Check if {userOneInfo.UserId} and {userTwoInfo.UserId} have been recently paired");
+
+            return !userOneInfo.RecentPairUps.Any(u => u.UserId == userTwoInfo.UserId) &&
+                !userTwoInfo.RecentPairUps.Any(u => u.UserId == userOneInfo.UserId);
         }
 
         /// <summary>
@@ -223,16 +400,14 @@ namespace Icebreaker.Services
         /// <param name="items">List of users to randomize</param>
         private void Randomize<T>(IList<T> items)
         {
-            Random rand = new Random(Guid.NewGuid().GetHashCode());
+            var rand = new Random(Guid.NewGuid().GetHashCode());
 
             // For each spot in the array, pick
             // a random item to swap into that spot.
-            for (int i = 0; i < items.Count - 1; i++)
+            for (var i = 0; i < items.Count - 1; i++)
             {
-                int j = rand.Next(i, items.Count);
-                T temp = items[i];
-                items[i] = items[j];
-                items[j] = temp;
+                var j = rand.Next(i, items.Count);
+                (items[i], items[j]) = (items[j], items[i]);
             }
         }
     }

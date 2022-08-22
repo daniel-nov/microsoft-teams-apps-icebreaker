@@ -21,6 +21,13 @@ namespace Icebreaker.Interfaces
         Task<IList<TeamInstallInfo>> GetInstalledTeamsAsync();
 
         /// <summary>
+        /// Get the stored information about the given user
+        /// </summary>
+        /// <param name="userId">User id</param>
+        /// <returns>User information</returns>
+        Task<UserInfo> GetUserInfoAsync(string userId);
+
+        /// <summary>
         /// Get the stored information about given users
         /// </summary>
         /// <returns>User information</returns>
@@ -50,5 +57,16 @@ namespace Icebreaker.Interfaces
         /// <param name="serviceUrl">User service URL</param>
         /// <returns>Tracking task</returns>
         Task SetUserInfoAsync(string tenantId, string userId, bool optedIn, string serviceUrl);
+
+        /// <summary>
+        /// Set the user info for the given user
+        /// </summary>
+        /// <param name="tenantId">Tenant id</param>
+        /// <param name="userId">User id</param>
+        /// <param name="optedIn">User opt-in status</param>
+        /// <param name="serviceUrl">User service URL</param>
+        /// <param name="recentPairUps">User recent pairs</param>
+        /// <returns>Tracking task</returns>
+        Task SetUserInfoAsync(string tenantId, string userId, bool optedIn, string serviceUrl, List<UserInfo> recentPairUps);
     }
 }

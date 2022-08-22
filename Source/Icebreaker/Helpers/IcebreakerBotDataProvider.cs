@@ -42,7 +42,7 @@ namespace Icebreaker.Helpers
         {
             this.telemetryClient = telemetryClient;
             this.secretsHelper = secretsHelper;
-            this.initializeTask = new Lazy<Task>(() => this.InitializeAsync());
+            this.initializeTask = new Lazy<Task>(this.InitializeAsync);
         }
 
         /// <summary>
@@ -196,6 +196,29 @@ namespace Icebreaker.Helpers
         public async Task SetUserInfoAsync(string tenantId, string userId, bool optedIn, string serviceUrl)
         {
             await this.EnsureInitializedAsync();
+            var userInfo = new UserInfo
+            {
+                TenantId = tenantId,
+                UserId = userId,
+                OptedIn = optedIn,
+                ServiceUrl = serviceUrl,
+            };
+
+            await this.documentClient.UpsertDocumentAsync(this.usersCollection.SelfLink, userInfo);
+        }
+
+        /// <summary>
+        /// Set the user info for the given user
+        /// </summary>
+        /// <param name="tenantId">Tenant id</param>
+        /// <param name="userId">User id</param>
+        /// <param name="optedIn">User opt-in status</param>
+        /// <param name="serviceUrl">User service URL</param>
+        /// <param name="recentPairUps">User recent pairs</param>
+        /// <returns>Tracking task</returns>
+        public async Task SetUserInfoAsync(string tenantId, string userId, bool optedIn, string serviceUrl, List<UserInfo> recentPairUps)
+        {
+            await this.EnsureInitializedAsync();
 
             var userInfo = new UserInfo
             {
@@ -203,6 +226,7 @@ namespace Icebreaker.Helpers
                 UserId = userId,
                 OptedIn = optedIn,
                 ServiceUrl = serviceUrl,
+                RecentPairUps = recentPairUps,
             };
             await this.documentClient.UpsertDocumentAsync(this.usersCollection.SelfLink, userInfo);
         }
