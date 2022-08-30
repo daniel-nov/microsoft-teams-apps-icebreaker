@@ -407,7 +407,9 @@ namespace Icebreaker.Services
             for (var i = 0; i < items.Count - 1; i++)
             {
                 var j = rand.Next(i, items.Count);
-                (items[i], items[j]) = (items[j], items[i]);
+                T temp = items[i];
+                items[i] = items[j];
+                items[j] = temp;
             }
         }
     }
