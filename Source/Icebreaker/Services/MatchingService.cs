@@ -95,7 +95,7 @@ namespace Icebreaker.Services
 
                         foreach (var pair in this.MakePairs(optedInUsers, team).Take(this.maxPairUpsPerTeam))
                         {
-                            usersNotifiedCount += await this.NotifyPairAsync(team, teamName, pair, default);
+                            usersNotifiedCount += await this.NotifyPairAsync(team, teamName, pair, default(CancellationToken));
                             pairsNotifiedCount++;
                         }
                     }
