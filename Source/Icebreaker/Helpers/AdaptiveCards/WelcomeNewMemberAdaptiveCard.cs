@@ -66,7 +66,7 @@ namespace Icebreaker.Helpers.AdaptiveCards
                 team = teamName,
                 welcomeCardImageUrl = $"https://{baseDomain}/Content/welcome-card-image.png",
                 pauseMatchesText = Resources.PausePairingsButtonText,
-                tourUrl = GetTourFullUrl(appId, GetTourUrl(baseDomain), tourTitle),
+                /*tourUrl = GetTourFullUrl(appId, GetTourUrl(baseDomain), tourTitle),*/
                 salutationText = Resources.SalutationTitleText,
                 tourButtonText = Resources.TakeATourButtonText,
             };
