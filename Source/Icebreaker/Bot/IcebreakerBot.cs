@@ -364,6 +364,8 @@ namespace Icebreaker.Bot
             if (userThatJustJoined != null)
             {
                 var welcomeMessageCard = WelcomeNewMemberAdaptiveCard.GetCard(teamName, userThatJustJoined.Name, this.botDisplayName, installedTeam.InstallerName);
+                //this.telemetryClient.TrackTrace(
+                //    $"WelcomeUser variables - teamName: {teamName}, userThatJustJoined.Name: {userThatJustJoined.Name}, this.botDisplayName: {this.botDisplayName}, installedTeam.InstallerName: {installedTeam.InstallerName}");
                 await this.conversationHelper.NotifyUserAsync(turnContext, MessageFactory.Attachment(welcomeMessageCard), userThatJustJoined, tenantId, cancellationToken);
             }
             else
@@ -385,6 +387,7 @@ namespace Icebreaker.Bot
             this.telemetryClient.TrackTrace($"Sending welcome message for team {teamId}");
 
             var teamName = turnContext.Activity.TeamsGetTeamInfo().Name;
+            this.telemetryClient.TrackTrace($"WelcomeTeam variables - teamName: {teamName}, botInstaller: {botInstaller}");
             var welcomeTeamMessageCard = WelcomeTeamAdaptiveCard.GetCard(teamName, botInstaller);
             await this.NotifyTeamAsync(turnContext, MessageFactory.Attachment(welcomeTeamMessageCard), teamId, cancellationToken);
         }
